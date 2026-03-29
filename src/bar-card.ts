@@ -4,7 +4,7 @@ import { BarCardConfig } from './types';
 import { localize } from './localize/localize';
 import { mergeDeep, hasConfigOrEntitiesChanged, createConfigArray, getMaxMinBasedOnType } from './helpers';
 import { styles } from './styles';
-import { LovelaceCardEditor, HomeAssistant, domainIcon, computeDomain, handleAction } from 'custom-card-helpers';
+import { LovelaceCardEditor, HomeAssistant, stateIcon, handleAction } from 'custom-card-helpers';
 import { LitElement, PropertyValues, html, TemplateResult } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { actionHandler } from './action-handler-directive';
@@ -182,10 +182,15 @@ export class BarCard extends LitElement {
           entityState = Math.max(entityState, min);
         }
 
+        // Capture the numeric value before any string formatting.
+        // toFixed() returns a string, which breaks numeric comparisons (e.g. "9" > "10" is true
+        // lexicographically but false numerically). rawNumeric is used wherever math is needed.
+        const rawNumeric = Number(entityState);
+
         // If decimal is defined check if NaN and apply number fix.
-        if (!isNaN(Number(entityState))) {
-          if (config.decimal == 0) entityState = Number(entityState).toFixed(0);
-          else if (config.decimal) entityState = Number(entityState).toFixed(config.decimal);
+        if (!isNaN(rawNumeric)) {
+          if (config.decimal == 0) entityState = rawNumeric.toFixed(0);
+          else if (config.decimal) entityState = rawNumeric.toFixed(config.decimal);
         }
 
         // Figure out the bar's pixel height.
@@ -222,10 +227,10 @@ export class BarCard extends LitElement {
           icon = this._computeSeverityIcon(entityState, index);
         } else if (config.icon) {
           icon = config.icon;
-        } else if (state.attributes.icon) {
-          icon = state.attributes.icon;
         } else {
-          icon = domainIcon(computeDomain(config.entity), entityState);
+          // stateIcon() already handles attributes.icon and falls back to domain icon;
+          // it also takes entity state into account (e.g. cover open/closed, lock locked/unlocked).
+          icon = stateIcon(state);
         }
         switch (config.positions.icon) {
           case 'outside':
@@ -311,13 +316,25 @@ export class BarCard extends LitElement {
         }
 
         // Set value html based on position.
+        // When complementary is set, compute the mirrored value (max - current) and apply the
+        // same decimal formatting so the display is consistent with the non-complementary path.
+        const complementaryRaw = max - rawNumeric;
+        let displayValue: string | number;
+        if (config.complementary && !isNaN(rawNumeric)) {
+          if (config.decimal == 0) displayValue = complementaryRaw.toFixed(0);
+          else if (config.decimal) displayValue = complementaryRaw.toFixed(config.decimal);
+          else displayValue = complementaryRaw;
+        } else {
+          displayValue = entityState;
+        }
+
         let valueOutside;
         let valueInside;
         switch (config.positions.value) {
           case 'outside':
             valueOutside = html`
               <bar-card-value class="${config.direction == 'up' ? 'value-direction-up' : 'value-direction-right'}"
-                >${config.complementary ? max - entityState : entityState} ${unitOfMeasurement}</bar-card-value
+                >${displayValue} ${unitOfMeasurement}</bar-card-value
               >
             `;
             break
@@ -329,7 +346,7 @@ export class BarCard extends LitElement {
                 : config.direction == 'up'
                   ? 'value-direction-up'
                   : 'value-direction-right'}"
-                >${config.complementary ? max - entityState : entityState} ${unitOfMeasurement}</bar-card-value
+                >${displayValue} ${unitOfMeasurement}</bar-card-value
               >
             `;
             break
@@ -339,19 +356,21 @@ export class BarCard extends LitElement {
         }
 
         // Set indicator and animation state based on value change.
+        // Use rawNumeric (not the toFixed-formatted string) for comparison: string comparison is
+        // lexicographic and gives wrong results for numbers (e.g. "9" > "10" → true).
         let indicatorText = '';
-        if (entityState > this._stateArray[index]) {
+        if (!isNaN(rawNumeric) && rawNumeric > Number(this._stateArray[index])) {
           indicatorText = '▲';
           if (config.direction == 'up') this._animationState[index] = 'animation-increase-vertical';
           else this._animationState[index] = 'animation-increase';
-        } else if (entityState < this._stateArray[index]) {
+        } else if (!isNaN(rawNumeric) && rawNumeric < Number(this._stateArray[index])) {
           indicatorText = '▼';
           if (config.direction == 'up') this._animationState[index] = 'animation-decrease-vertical';
           else this._animationState[index] = 'animation-decrease';
         } else {
           this._animationState[index] = this._animationState[index];
         }
-        if (isNaN(Number(entityState))) {
+        if (isNaN(rawNumeric)) {
           indicatorText = '';
         }
 
